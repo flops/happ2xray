@@ -37,10 +37,13 @@ for its own downloads if `curl` isn't installed):
 wget -qO- https://raw.githubusercontent.com/flops/happ2xray/main/install.sh | sh
 ```
 
-Installs `bash`/`jq`/`curl` via `opkg` where available, downloads both
+Installs `bash`/`jq`/`curl` via `opkg` where available, downloads the
 scripts plus `.env.example` into `/opt/etc/happ2xray` (override with
-`INSTALL_DIR=...`), and creates `.env` from the example if one doesn't
-already exist. Safe to re-run — it won't overwrite an existing `.env`.
+`INSTALL_DIR=...`), creates `.env` from the example if one doesn't already
+exist, and installs a `happ_watch` command into `/opt/sbin` (override with
+`BIN_DIR=`/`BIN_NAME=`) — the same idea as `/opt/sbin/xkeen` — so you can
+run `happ_watch -watch` instead of `bash /opt/etc/happ2xray/happ_watch.sh
+-watch`. Safe to re-run — it won't overwrite an existing `.env`.
 
 ## Setup
 
