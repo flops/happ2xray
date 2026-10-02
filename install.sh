@@ -6,8 +6,11 @@
 # example if one doesn't already exist. Written in POSIX sh (no bashisms)
 # so it runs under a bare BusyBox ash shell before bash itself is installed.
 #
-# Usage:
+# Usage (curl):
 #   curl -fsSL https://raw.githubusercontent.com/flops/happ2xray/main/install.sh | sh
+# Usage (wget, if curl isn't available):
+#   wget -qO- https://raw.githubusercontent.com/flops/happ2xray/main/install.sh | sh
+# Either way:
 #   INSTALL_DIR=/opt/etc/happ2xray sh install.sh
 
 set -eu
@@ -15,7 +18,25 @@ set -eu
 INSTALL_DIR="${INSTALL_DIR:-/opt/etc/happ2xray}"
 REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/flops/happ2xray/main}"
 
-command -v curl >/dev/null 2>&1 || { echo "error: curl is required" >&2; exit 1; }
+# Use whichever of curl/wget is actually available to fetch this script's
+# own files -- some minimal/Entware setups ship one but not the other.
+if command -v curl >/dev/null 2>&1; then
+    DOWNLOADER=curl
+elif command -v wget >/dev/null 2>&1; then
+    DOWNLOADER=wget
+else
+    echo "error: curl or wget is required" >&2
+    exit 1
+fi
+
+fetch() {
+    # fetch URL DEST
+    if [ "$DOWNLOADER" = "curl" ]; then
+        curl -fsSL "$1" -o "$2"
+    else
+        wget -q -O "$2" "$1"
+    fi
+}
 
 if command -v opkg >/dev/null 2>&1; then
     echo "Installing dependencies via opkg..."
@@ -32,7 +53,7 @@ mkdir -p "$INSTALL_DIR"
 
 for f in happ_routing_to_xray.sh happ_watch.sh up.sh down.sh .env.example README.md; do
     echo "Downloading $f..."
-    curl -fsSL "$REPO_RAW_BASE/$f" -o "$INSTALL_DIR/$f"
+    fetch "$REPO_RAW_BASE/$f" "$INSTALL_DIR/$f"
 done
 
 chmod +x "$INSTALL_DIR/happ_routing_to_xray.sh" "$INSTALL_DIR/happ_watch.sh" "$INSTALL_DIR/up.sh" "$INSTALL_DIR/down.sh"

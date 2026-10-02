@@ -24,10 +24,17 @@ restarts `xkeen` when it updates.
 
 ## Install
 
-On a router (Keenetic/Entware) or any machine with `curl`:
+On a router (Keenetic/Entware) or any machine with `curl` or `wget`:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/flops/happ2xray/main/install.sh | sh
+```
+
+No `curl`? Use `wget` instead (the script itself also falls back to `wget`
+for its own downloads if `curl` isn't installed):
+
+```
+wget -qO- https://raw.githubusercontent.com/flops/happ2xray/main/install.sh | sh
 ```
 
 Installs `bash`/`jq`/`curl` via `opkg` where available, downloads both
