@@ -52,6 +52,12 @@
 #
 # Reads a .env file next to this script for:
 #   XRAY_SUBSCRIPTION_URL  The subscription URL (required unless passed as $1).
+#   XRAY_HWID              Optional. Pins the x-hwid header sent with every
+#                          subscription request (Remnawave's "HWID device
+#                          limit" feature; must match /^[a-zA-Z0-9=-]{10,64}$/).
+#                          If unset, one is derived from this device
+#                          (hostname/kernel/MAC, see generate_hwid) once
+#                          and cached in SCRIPT_DIR/.hwid for every later run.
 #   XRAY_DIR_PATH          Optional. When set (e.g. /opt/etc/xray), the JSON
 #                          configs and dat files default into that Xray
 #                          installation's configs/ and dat/ subdirectories
@@ -507,6 +513,42 @@ write_fragment() {
     fi
 }
 
+# Derives a stable id from actual device characteristics instead of pure
+# randomness: hostname, kernel release/arch (uname -r/-m), and the first
+# real NIC's MAC address (read straight from sysfs -- no extra command,
+# and the closest thing to an actual hardware id available here). Every
+# piece is a BusyBox-standard applet or a plain /sys read, so this needs
+# no opkg packages beyond what the rest of the script already requires.
+# Hashed down to a fixed-length hex string so it reliably fits Remnawave's
+# required x-hwid format regardless of how long the raw inputs are.
+generate_hwid() {
+    local mac="" f
+    for f in /sys/class/net/*/address; do
+        [[ -r "$f" ]] || continue
+        read -r mac <"$f" 2>/dev/null
+        [[ -n "$mac" && "$mac" != "00:00:00:00:00:00" ]] && break
+        mac=""
+    done
+
+    local seed
+    seed="$(hostname 2>/dev/null)|$(uname -r 2>/dev/null)|$(uname -m 2>/dev/null)|$mac"
+
+    local hash=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        hash="$(printf '%s' "$seed" | sha256sum | cut -c1-32)"
+    elif command -v md5sum >/dev/null 2>&1; then
+        hash="$(printf '%s' "$seed" | md5sum | cut -c1-32)"
+    fi
+
+    # Fall back to /dev/urandom only if the device-derived seed somehow
+    # produced nothing usable (e.g. no hash tool and no readable /sys).
+    if [[ "${#hash}" -lt 10 ]]; then
+        hash="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    fi
+
+    printf '%s' "$hash"
+}
+
 # --- happ_json (decoded routing profile) -> Xray config fragments ----------
 
 # Prints the (unwrapped) "dns" object. Takes the decoded happ routing JSON.
@@ -649,6 +691,33 @@ main() {
         exit 1
     fi
 
+    # Remnawave's "HWID device limit" feature requires the client to send an
+    # x-hwid header (must match /^[a-zA-Z0-9=-]{10,64}$/) on every request to
+    # the subscription URL, or it 404s once that feature is enabled for this
+    # user. The HWID must stay stable across runs -- Remnawave counts/tracks
+    # devices by it, so a value that changed every run would burn through
+    # the device limit. XRAY_HWID in .env pins an explicit value (e.g. one
+    # tied to your actual device/HWID link); otherwise one is derived once
+    # from this device (see generate_hwid) and cached in SCRIPT_DIR/.hwid for
+    # every run after that to reuse, so it survives things like a kernel
+    # version bump that would otherwise shift the derived value.
+    local HWID="${XRAY_HWID:-}"
+    if [[ -z "$HWID" ]]; then
+        local hwid_file="$SCRIPT_DIR/.hwid"
+        if [[ -f "$hwid_file" ]]; then
+            HWID="$(<"$hwid_file")"
+        else
+            HWID="$(generate_hwid)"
+            printf '%s' "$HWID" >"$hwid_file"
+        fi
+    fi
+    local HWID_CURL_ARGS=(
+        -H "x-hwid: $HWID"
+        -H "x-device-os: Linux"
+        -H "x-device-model: happ2xray"
+        -A "happ2xray/1.0"
+    )
+
     local BASE_DIR
     if [[ -n "${XRAY_DIR_PATH:-}" ]]; then
         BASE_DIR="$XRAY_DIR_PATH"
@@ -719,7 +788,7 @@ main() {
     # 1. Grab response headers only (HEAD is enough; Remnawave computes the
     #    routing header without needing the full subscription body).
     local headers
-    headers="$(curl -sSI "$SUB_URL")"
+    headers="$(curl -sSI "${HWID_CURL_ARGS[@]}" "$SUB_URL")"
 
     local routing_header
     routing_header="$(printf '%s\n' "$headers" | grep -i '^routing:' | head -n1 | cut -d' ' -f2- | tr -d '\r')"
@@ -754,7 +823,7 @@ main() {
     # 3. Fetch the subscription body itself (the base64 list of proxy links) and
     #    convert each vless/vmess/trojan/ss entry into an Xray outbound object.
     local sub_body
-    sub_body="$(curl -fsSL "$SUB_URL" | base64 -d 2>/dev/null)"
+    sub_body="$(curl -fsSL "${HWID_CURL_ARGS[@]}" "$SUB_URL" | base64 -d 2>/dev/null)"
 
     if [[ -z "$sub_body" ]]; then
         echo "error: subscription body at $SUB_URL was empty or not base64" >&2

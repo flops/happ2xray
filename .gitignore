@@ -5,6 +5,7 @@
 configs/
 dat/
 happ_watch.log
+.hwid
 
 # Unrelated local/system files
 chats.db

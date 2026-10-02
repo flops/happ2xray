@@ -54,6 +54,13 @@ cp .env.example .env
 Edit `.env` and set at least `XRAY_SUBSCRIPTION_URL`. See `.env.example` for
 every variable and its default.
 
+If your panel has Remnawave's "HWID device limit" enabled, every
+subscription request needs an `x-hwid` header or it gets a `404`. This is
+handled automatically — an id derived from this device (hostname, kernel
+release/arch, NIC MAC address; not random) is computed once and cached in
+`.hwid` next to the script, then reused on every later run (set `XRAY_HWID`
+in `.env` instead if you already have a specific HWID tied to this device).
+
 ## Usage
 
 ```
