@@ -1,0 +1,13 @@
+# Local secrets/config
+.env
+
+# Generated output
+configs/
+dat/
+happ_watch.log
+
+# Unrelated local/system files
+chats.db
+*.log
+*.tmp
+.DS_Store
