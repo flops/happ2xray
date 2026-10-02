@@ -77,6 +77,51 @@ assert_json_eq "$out" '{
     }
 }' "parse_vmess: tls+ws+alpn link"
 
+# Hysteria2: plain TLS (sni falls back to host when unset elsewhere, but
+# here it's given explicitly).
+out="$(parse_hysteria2 'hysteria2://examplepassword@203.0.113.30:443?sni=hy2.example.com#Example%20Hysteria2' 2>/dev/null)"
+assert_json_eq "$out" '{
+    "tag": "Example Hysteria2",
+    "protocol": "hysteria",
+    "settings": {"version": 2, "address": "203.0.113.30", "port": 443},
+    "streamSettings": {
+        "method": "hysteria",
+        "hysteriaSettings": {"version": 2, "auth": "examplepassword"},
+        "security": "tls",
+        "tlsSettings": {"serverName": "hy2.example.com"}
+    }
+}' "parse_hysteria2: plain tls link"
+
+# hy2:// alias, insecure + alpn, sni falling back to the server host.
+out="$(parse_hysteria2 'hy2://examplepassword@203.0.113.31:443?insecure=1&alpn=h3#Example%20Hy2' 2>/dev/null)"
+assert_json_eq "$out" '{
+    "tag": "Example Hy2",
+    "protocol": "hysteria",
+    "settings": {"version": 2, "address": "203.0.113.31", "port": 443},
+    "streamSettings": {
+        "method": "hysteria",
+        "hysteriaSettings": {"version": 2, "auth": "examplepassword"},
+        "security": "tls",
+        "tlsSettings": {"serverName": "203.0.113.31", "alpn": ["h3"], "allowInsecure": true}
+    }
+}' "parse_hysteria2: hy2 alias, insecure + alpn, sni defaults to host"
+
+# obfs isn't representable in Xray-core's hysteria transport -- parse_hysteria2
+# should still produce a connectable (non-obfuscated) config, but warn on stderr
+# rather than silently dropping something the link asked for.
+obfs_stderr="$(parse_hysteria2 'hysteria2://examplepassword@203.0.113.32:443?obfs=salamander&obfs-password=secret#Obfs%20Test' 2>&1 1>/dev/null)"
+assert_contains "$obfs_stderr" "obfs=salamander" \
+    "parse_hysteria2: warns on stderr when the link specifies unsupported obfs"
+out="$(parse_hysteria2 'hysteria2://examplepassword@203.0.113.32:443?obfs=salamander&obfs-password=secret#Obfs%20Test' 2>/dev/null)"
+assert_json_eq "$(jq '.streamSettings.hysteriaSettings' <<<"$out")" '{"version": 2, "auth": "examplepassword"}' \
+    "parse_hysteria2: obfs params are dropped (not fabricated into an unsupported field)"
+
+# parse_outbounds dispatches both scheme spellings to parse_hysteria2.
+mixed_links=$'hysteria2://examplepassword@203.0.113.33:443#H2\nhy2://examplepassword@203.0.113.34:443#H2alias'
+out="$(printf '%s\n' "$mixed_links" | parse_outbounds 2>/dev/null)"
+assert_json_eq "$(jq '[.[].protocol]' <<<"$out")" '["hysteria", "hysteria"]' \
+    "parse_outbounds: both hysteria2:// and hy2:// dispatch to the hysteria protocol"
+
 # Duplicate tags get disambiguated across calls within one parse_outbounds
 # run (unique_tag's ledger is a temp file set up by parse_outbounds itself --
 # every caller is reached via command substitution, which forks a subshell,

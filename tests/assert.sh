@@ -36,6 +36,20 @@ assert_eq() {
     fi
 }
 
+# assert_contains HAYSTACK NEEDLE DESC -- substring match.
+assert_contains() {
+    local haystack="$1" needle="$2" desc="$3"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [[ "$haystack" == *"$needle"* ]]; then
+        echo "ok - $desc"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "NOT OK - $desc"
+        echo "    expected to contain: $needle"
+        echo "    actual:              $haystack"
+    fi
+}
+
 # assert_jq JSON FILTER DESC -- asserts a jq boolean filter is true against JSON.
 assert_jq() {
     local json="$1" filter="$2" desc="$3"

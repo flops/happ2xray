@@ -4,7 +4,7 @@
 
 Turns a Remnawave (remna.st) subscription URL into Xray-core config fragments:
 reads the Happ client's embedded routing profile, parses the subscription's
-proxy links (vless/vmess/trojan/ss), and writes out `dns`, `outbounds`,
+proxy links (vless/vmess/trojan/ss/hysteria2), and writes out `dns`, `outbounds`,
 `observatory`, and `routing` as separate JSON files you merge into your real
 Xray config. A second script watches the subscription for changes and
 restarts `xkeen` when it updates.
@@ -93,6 +93,12 @@ explicit empty value means "skip".
 
 - **outbounds** — one entry per proxy link in the subscription (tagged by
   its `#name`), plus a `direct` (freedom) and `block` (blackhole) outbound.
+  Supports vless, vmess, trojan, shadowsocks, and hysteria2 (`hysteria2://`
+  or `hy2://`, emitted as Xray-core's `"hysteria"` protocol — that's its
+  real name there). Hysteria2's `obfs`/`obfs-password` (e.g. salamander)
+  isn't representable in Xray-core's hysteria transport; a link using it
+  still gets parsed, but logs a warning and drops the obfuscation instead
+  of silently producing a config a strict server would reject.
 - **routing** — `direct`/`block` rules point at those outbounds by tag;
   `proxy` rules point at a **balancer** (tag `proxy` by default, see
   `XRAY_BALANCER_TAG`) whose selector covers every parsed proxy outbound,

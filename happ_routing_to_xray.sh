@@ -41,9 +41,14 @@
 # (your own inbound(s) still need sniffing+destOverride:["fakedns"] for it
 # to actually activate -- this project doesn't generate inbounds).
 #
-# The subscription's proxy links (vless://, vmess://, trojan://, ss://) are
-# parsed in pure bash + jq + coreutils base64 below -- no python, no eval of
-# remote input.
+# The subscription's proxy links (vless://, vmess://, trojan://, ss://,
+# hysteria2:// / hy2://) are parsed in pure bash + jq + coreutils base64
+# below -- no python, no eval of remote input. Hysteria2 is emitted as
+# Xray-core's protocol "hysteria" (that's its actual name in Xray); its
+# obfs/obfs-password (e.g. salamander) isn't representable in Xray-core's
+# hysteria transport, so a link using it still gets parsed but logs a
+# warning and drops obfuscation rather than silently producing a config
+# that a server mandating obfs would simply reject.
 #
 # Reads a .env file next to this script for:
 #   XRAY_SUBSCRIPTION_URL  The subscription URL (required unless passed as $1).
@@ -375,6 +380,76 @@ parse_shadowsocks() {
     '
 }
 
+# Hysteria2's QUIC transport always runs over TLS -- there's no "security"
+# choice to make, so this always emits a tlsSettings block (sni/insecure/
+# alpn/fp from the query params, falling back to the server host for sni).
+build_hysteria_security_settings() {
+    local -n _q="$1"
+    local fallback_host="$2"
+
+    local alpn="${_q[alpn]:-}"
+    local alpn_json="null"
+    [[ -n "$alpn" ]] && alpn_json="$(jq -n --arg a "$alpn" '$a | split(",")')"
+
+    local allow_insecure="${_q[insecure]:-}"
+    local allow_insecure_lc="${allow_insecure,,}"
+    local insecure_bool="false"
+    [[ "$allow_insecure" == "1" || "$allow_insecure_lc" == "true" ]] && insecure_bool="true"
+
+    jq -n \
+        --arg sni "${_q[sni]:-$fallback_host}" --arg fp "${_q[fp]:-}" \
+        --argjson alpn "$alpn_json" --argjson insecure "$insecure_bool" '
+        {security: "tls", tlsSettings: (
+            {serverName: $sni}
+            + (if $alpn != null then {alpn: $alpn} else {} end)
+            + (if $fp != "" then {fingerprint: $fp} else {} end)
+            + (if $insecure then {allowInsecure: true} else {} end)
+        )}
+    '
+}
+
+# vless-style userinfo@host:port parsing, but the userinfo is a plain auth
+# password (no uuid/encryption) and the protocol is always TLS. Handles both
+# the hysteria2:// and hy2:// scheme spellings (caller strips either prefix).
+#
+# Xray-core's hysteria transport has no field for obfuscation (obfs/
+# obfs-password, e.g. salamander) -- a link using it is parsed and still
+# produces a connectable (non-obfuscated) config, but a server that mandates
+# obfs will reject it, so this warns rather than silently dropping it.
+parse_hysteria2() {
+    local uri="$1"
+    local body="${uri#*://}"
+    local before frag
+    { read -r before; read -r frag; } <<<"$(split_fragment "$body")"
+
+    local main="$before" query=""
+    if [[ "$main" == *'?'* ]]; then query="${main#*\?}"; main="${main%%\?*}"; fi
+
+    local auth="${main%%@*}"
+    local hostport="${main#*@}"
+    local host="${hostport%:*}"
+    local port="${hostport##*:}"
+
+    local -A q=()
+    parse_query q "$query"
+
+    local tag_hint; tag_hint="$(urldecode "$frag")"
+    [[ -z "$tag_hint" ]] && tag_hint="hysteria2-$host"
+    local tag; tag="$(unique_tag "$tag_hint")"
+
+    if [[ -n "${q[obfs]:-}" ]]; then
+        echo "warning: hysteria2 link '$tag_hint' uses obfs=${q[obfs]}, which Xray-core's hysteria transport does not support -- generating it without obfuscation" >&2
+    fi
+
+    local security; security="$(build_hysteria_security_settings q "$host")"
+
+    jq -n --arg tag "$tag" --arg address "$host" --argjson port "$port" --arg auth "$(urldecode "$auth")" --argjson security "$security" '
+        {tag: $tag, protocol: "hysteria",
+         settings: {version: 2, address: $address, port: $port},
+         streamSettings: ({method: "hysteria", hysteriaSettings: {version: 2, auth: $auth}} + $security)}
+    '
+}
+
 # Reads proxy links (one per line) on stdin, prints an Xray outbounds JSON array on stdout.
 parse_outbounds() {
     local outbounds="[]"
@@ -397,6 +472,7 @@ parse_outbounds() {
             trojan) obj="$(parse_trojan "$line")" ;;
             vmess)  obj="$(parse_vmess "$line")" ;;
             ss)     obj="$(parse_shadowsocks "$line")" ;;
+            hysteria2|hy2) obj="$(parse_hysteria2 "$line")" ;;
             *)
                 echo "warning: skipping unsupported scheme '$scheme'" >&2
                 continue
