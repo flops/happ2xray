@@ -83,6 +83,12 @@ arguments) at the same path to have the script merge them into one file
 itself as it generates them, in that same order — handy if you'd rather
 end up with a single combined config than four files to merge yourself.
 
+Set any of the four to an explicit empty string (not just leave it unset)
+to skip generating that file entirely — e.g. `XRAY_OBSERVATORY_FILE=` in
+`.env` if you don't want an observatory block at all. Leaving a var unset
+(or commented out) still falls back to its default as normal; only an
+explicit empty value means "skip".
+
 ### What's in each fragment
 
 - **outbounds** — one entry per proxy link in the subscription (tagged by

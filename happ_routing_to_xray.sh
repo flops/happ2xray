@@ -28,6 +28,11 @@
 # they're merged into that one file instead of the last write clobbering the
 # earlier ones -- set all four to the same path to get one combined config.
 #
+# Any of those four, if explicitly set to an empty string (as an arg or as
+# its XRAY_*_FILE env var), skips generating that file entirely rather than
+# falling back to its numbered default -- an unset arg/env var still falls
+# back as usual; only an explicit "" means "skip".
+#
 # The dns block splits resolution the same way routing does: DirectSites
 # get resolved via the DomesticDNS* server (skipFallback, so it won't also
 # try the remote one), everything else via the RemoteDNS* server. DnsHosts
@@ -576,18 +581,60 @@ main() {
     fi
     local CONFIG_DIR="$BASE_DIR/configs"
 
-    local OUTPUT_FILE="${2:-${XRAY_ROUTING_FILE:-$CONFIG_DIR/04_routing_happ.json}}"
+    # For each of these, an arg/env var that's unset falls back to the next
+    # layer (arg -> env var -> numbered default), same as before. But one
+    # that's explicitly set to "" is taken at face value -- an empty path
+    # means "don't generate this file at all" (see the write_fragment guards
+    # below), not "fall back to the default". ${N+x}/${VAR+x} expands to a
+    # non-empty string iff the parameter is set, even to "", unlike ${N:-x}
+    # which can't tell "unset" apart from "set but empty".
     local DAT_DIR="${3:-$BASE_DIR/dat}"
-    local OUTBOUNDS_FILE="${4:-${XRAY_OUTBOUNDS_FILE:-$CONFIG_DIR/02_outbounds_happ.json}}"
-    local OBSERVATORY_FILE="${5:-${XRAY_OBSERVATORY_FILE:-$CONFIG_DIR/03_observatory_happ.json}}"
-    local DNS_FILE="${6:-${XRAY_DNS_FILE:-$CONFIG_DIR/01_dns_happ.json}}"
+
+    local OUTPUT_FILE
+    if [[ -n "${2+x}" ]]; then
+        OUTPUT_FILE="$2"
+    elif [[ -n "${XRAY_ROUTING_FILE+x}" ]]; then
+        OUTPUT_FILE="$XRAY_ROUTING_FILE"
+    else
+        OUTPUT_FILE="$CONFIG_DIR/04_routing_happ.json"
+    fi
+
+    local OUTBOUNDS_FILE
+    if [[ -n "${4+x}" ]]; then
+        OUTBOUNDS_FILE="$4"
+    elif [[ -n "${XRAY_OUTBOUNDS_FILE+x}" ]]; then
+        OUTBOUNDS_FILE="$XRAY_OUTBOUNDS_FILE"
+    else
+        OUTBOUNDS_FILE="$CONFIG_DIR/02_outbounds_happ.json"
+    fi
+
+    local OBSERVATORY_FILE
+    if [[ -n "${5+x}" ]]; then
+        OBSERVATORY_FILE="$5"
+    elif [[ -n "${XRAY_OBSERVATORY_FILE+x}" ]]; then
+        OBSERVATORY_FILE="$XRAY_OBSERVATORY_FILE"
+    else
+        OBSERVATORY_FILE="$CONFIG_DIR/03_observatory_happ.json"
+    fi
+
+    local DNS_FILE
+    if [[ -n "${6+x}" ]]; then
+        DNS_FILE="$6"
+    elif [[ -n "${XRAY_DNS_FILE+x}" ]]; then
+        DNS_FILE="$XRAY_DNS_FILE"
+    else
+        DNS_FILE="$CONFIG_DIR/01_dns_happ.json"
+    fi
 
     local BALANCER_TAG="${XRAY_BALANCER_TAG:-proxy}"
     local BALANCER_STRATEGY="${XRAY_BALANCER_STRATEGY:-leastPing}"
     local PROBE_URL="${XRAY_PROBE_URL:-https://www.gstatic.com/generate_204}"
     local PROBE_INTERVAL="${XRAY_PROBE_INTERVAL:-10s}"
 
-    mkdir -p "$(dirname "$OUTPUT_FILE")" "$(dirname "$OUTBOUNDS_FILE")" "$(dirname "$OBSERVATORY_FILE")" "$(dirname "$DNS_FILE")"
+    [[ -n "$OUTPUT_FILE" ]] && mkdir -p "$(dirname "$OUTPUT_FILE")"
+    [[ -n "$OUTBOUNDS_FILE" ]] && mkdir -p "$(dirname "$OUTBOUNDS_FILE")"
+    [[ -n "$OBSERVATORY_FILE" ]] && mkdir -p "$(dirname "$OBSERVATORY_FILE")"
+    [[ -n "$DNS_FILE" ]] && mkdir -p "$(dirname "$DNS_FILE")"
 
     for bin in curl jq base64; do
         command -v "$bin" >/dev/null 2>&1 || { echo "error: '$bin' is required but not installed" >&2; exit 1; }
@@ -621,8 +668,12 @@ main() {
     dns_json="$(build_dns_json "$happ_json")"
     fakedns_json="$(build_fakedns_json "$happ_json")"
 
-    write_fragment "$DNS_FILE" "$(jq -n --argjson dns "$dns_json" --argjson fakedns "$fakedns_json" '{dns: $dns, fakedns: $fakedns}')"
-    echo "DNS written to $DNS_FILE" >&2
+    if [[ -n "$DNS_FILE" ]]; then
+        write_fragment "$DNS_FILE" "$(jq -n --argjson dns "$dns_json" --argjson fakedns "$fakedns_json" '{dns: $dns, fakedns: $fakedns}')"
+        echo "DNS written to $DNS_FILE" >&2
+    else
+        echo "DNS generation skipped (empty file path)" >&2
+    fi
 
     # 3. Fetch the subscription body itself (the base64 list of proxy links) and
     #    convert each vless/vmess/trojan/ss entry into an Xray outbound object.
@@ -640,16 +691,24 @@ main() {
     # "direct"/"block" are appended only to the file written out -- $outbounds_json
     # itself (used below for the balancer's selector and the Observatory's
     # subjectSelector) stays limited to the real proxy outbounds parsed above.
-    write_fragment "$OUTBOUNDS_FILE" "$(build_outbounds_file_json "$outbounds_json")"
-    echo "Outbounds written to $OUTBOUNDS_FILE" >&2
+    if [[ -n "$OUTBOUNDS_FILE" ]]; then
+        write_fragment "$OUTBOUNDS_FILE" "$(build_outbounds_file_json "$outbounds_json")"
+        echo "Outbounds written to $OUTBOUNDS_FILE" >&2
+    else
+        echo "Outbounds generation skipped (empty file path)" >&2
+    fi
 
     # 3b. Build the Observatory block the "proxy" balancer's leastPing strategy
     #     needs: it actively probes every outbound tag and ranks them by latency.
     local observatory_json
     observatory_json="$(build_observatory_json "$outbounds_json" "$PROBE_URL" "$PROBE_INTERVAL")"
 
-    write_fragment "$OBSERVATORY_FILE" "$(jq -n --argjson observatory "$observatory_json" '{observatory: $observatory}')"
-    echo "Observatory written to $OBSERVATORY_FILE" >&2
+    if [[ -n "$OBSERVATORY_FILE" ]]; then
+        write_fragment "$OBSERVATORY_FILE" "$(jq -n --argjson observatory "$observatory_json" '{observatory: $observatory}')"
+        echo "Observatory written to $OBSERVATORY_FILE" >&2
+    else
+        echo "Observatory generation skipped (empty file path)" >&2
+    fi
 
     # 4. Convert Happ's Direct/Proxy/Block site & IP lists into Xray routing
     #    rules, honoring the order declared in RouteOrder (e.g. "direct-proxy-block").
@@ -662,8 +721,12 @@ main() {
     routes_json="$(build_routes_json "$happ_json" "$outbounds_json" "$BALANCER_STRATEGY" "$BALANCER_TAG")"
     routes_json="$(jq -n --argjson routing "$routes_json" '{routing: $routing}')"
 
-    write_fragment "$OUTPUT_FILE" "$routes_json"
-    echo "Routes written to $OUTPUT_FILE" >&2
+    if [[ -n "$OUTPUT_FILE" ]]; then
+        write_fragment "$OUTPUT_FILE" "$routes_json"
+        echo "Routes written to $OUTPUT_FILE" >&2
+    else
+        echo "Routes generation skipped (empty file path)" >&2
+    fi
 
     # 5. Download the geoip.dat/geosite.dat assets the profile references, so
     #    the geoip:/geosite: entries in the rules above have something to match against.
